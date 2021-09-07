@@ -43,7 +43,7 @@ pub mod result;
 mod variant_dictionary;
 mod xml_parse;
 
-pub(crate) mod parse;
+pub mod parse;
 
 pub use self::db::*;
 pub use self::result::{CryptoError, DatabaseIntegrityError, Error, Result};
