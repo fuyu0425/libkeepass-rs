@@ -1,12 +1,18 @@
 use crate::crypt::ciphers::Cipher;
 use crate::result::{DatabaseIntegrityError, Error, Result};
+use byteorder::{LittleEndian, WriteBytesExt};
 
 use secstr::SecStr;
 
 use xml::name::OwnedName;
 use xml::reader::{EventReader, XmlEvent};
+use xml::writer::{EmitterConfig, EventWriter, Result as WResult, XmlEvent as WXmlEvent};
 
-use super::db::{AutoType, AutoTypeAssociation, Entry, Group, Meta, Value};
+use std::io::Write;
+
+use super::db::{
+    AutoType, AutoTypeAssociation, Database, Entry, Group, Meta, Node as DBNode, Value,
+};
 
 #[derive(Debug)]
 enum Node {
@@ -22,6 +28,235 @@ enum Node {
     RecycleBinUUID(String),
 }
 
+pub(crate) trait Serializable {
+    fn serialize<W: Write>(
+        &self,
+        w: &mut EventWriter<W>,
+        encryptor: &mut dyn Cipher,
+    ) -> WResult<()>;
+}
+
+fn write_simple_element<W: Write>(w: &mut EventWriter<W>, tag: &str, value: &str) -> WResult<()> {
+    w.write(WXmlEvent::start_element(tag))?;
+    w.write(WXmlEvent::characters(value))?;
+    w.write(WXmlEvent::end_element())?;
+    Ok(())
+}
+
+impl Serializable for Meta {
+    fn serialize<W: Write>(
+        &self,
+        w: &mut EventWriter<W>,
+        _encryptor: &mut dyn Cipher,
+    ) -> WResult<()> {
+        w.write(WXmlEvent::start_element("Meta"))?;
+
+        w.write(WXmlEvent::start_element("RecycleBinUUID"))?;
+        w.write(WXmlEvent::characters(&self.recyclebin_uuid))?;
+        w.write(WXmlEvent::end_element())?;
+        // some HashMap containing all unknown keys?
+
+        w.write(WXmlEvent::end_element())?;
+        Ok(())
+    }
+}
+
+impl Serializable for Entry {
+    fn serialize<W: Write>(
+        &self,
+        w: &mut EventWriter<W>,
+        encryptor: &mut dyn Cipher,
+    ) -> WResult<()> {
+        w.write(WXmlEvent::start_element("Entry"))?;
+
+        w.write(WXmlEvent::start_element("UUID"))?;
+        w.write(WXmlEvent::characters(&self.uuid))?;
+        w.write(WXmlEvent::end_element())?;
+
+        w.write(WXmlEvent::start_element("IconID"))?;
+        w.write(WXmlEvent::characters(&self.icon_id.to_string()))?;
+        w.write(WXmlEvent::end_element())?;
+
+        write_simple_element(w, "Expires", if self.expires { "True" } else { "False" })?;
+        // ForegroundColor, BackgroundColor, OverrideURL, Tags
+
+        for field_name in self.fields.keys() {
+            w.write(WXmlEvent::start_element("String"))?;
+            w.write(WXmlEvent::start_element("Key"))?;
+            w.write(WXmlEvent::characters(&field_name))?;
+            w.write(WXmlEvent::end_element())?;
+            match self.fields.get(field_name) {
+                Some(&Value::Bytes(_)) => {
+                    w.write(WXmlEvent::start_element("Value"))?;
+                    // FIXME: no bytes value
+                    w.write(WXmlEvent::end_element())?;
+                }
+                Some(&Value::Protected(ref pv)) => {
+                    w.write(WXmlEvent::start_element("Value").attr("Protected", "True"))?;
+
+                    let plain = std::str::from_utf8(pv.unsecure())
+                        .ok()
+                        .unwrap()
+                        .as_bytes()
+                        .to_vec();
+
+                    if plain.len() > 0 {
+                        let buf_encrypted = encryptor.encrypt(&plain).unwrap();
+                        let buf_encoded = base64::encode(&buf_encrypted);
+
+                        w.write(WXmlEvent::characters(&buf_encoded))?;
+                    }
+                    w.write(WXmlEvent::end_element())?;
+                }
+                Some(&Value::Unprotected(ref uv)) => {
+                    w.write(WXmlEvent::start_element("Value"))?;
+                    w.write(WXmlEvent::characters(&uv))?;
+                    w.write(WXmlEvent::end_element())?;
+                }
+                None => {
+                    w.write(WXmlEvent::start_element("Value"))?;
+                    w.write(WXmlEvent::end_element())?;
+                }
+            };
+
+            w.write(WXmlEvent::end_element())?;
+        }
+
+        if let Some(at) = &self.autotype {
+            w.write(WXmlEvent::start_element("AutoType"))?;
+            write_simple_element(w, "Enabled", if at.enabled { "True" } else { "False" })?;
+            if let Some(seq) = &at.sequence {
+                write_simple_element(w, "DefaultSequence", seq)?;
+            }
+            w.write(WXmlEvent::end_element())?;
+        }
+
+        if self.history.len() > 0 {
+            w.write(WXmlEvent::start_element("History"))?;
+            for history_item in &self.history {
+                history_item.serialize(w, encryptor)?;
+            }
+            w.write(WXmlEvent::end_element())?;
+        }
+
+        let start =
+            chrono::NaiveDateTime::parse_from_str("0001-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+                .unwrap()
+                .timestamp();
+        w.write(WXmlEvent::start_element("Times"))?;
+        for (key, value) in &self.times {
+            let mut ts_bytes = vec![];
+            ts_bytes.write_i64::<LittleEndian>(value.timestamp() - start)?;
+            w.write(WXmlEvent::start_element(key.as_str()))?;
+            w.write(WXmlEvent::characters(base64::encode(ts_bytes).as_str()))?;
+            w.write(WXmlEvent::end_element())?;
+        }
+        w.write(WXmlEvent::end_element())?;
+
+        w.write(WXmlEvent::end_element())?;
+        Ok(())
+    }
+}
+impl Serializable for Group {
+    fn serialize<W: Write>(
+        &self,
+        w: &mut EventWriter<W>,
+        encryptor: &mut dyn Cipher,
+    ) -> WResult<()> {
+        w.write(WXmlEvent::start_element("Group"))?;
+
+        w.write(WXmlEvent::start_element("UUID"))?;
+        w.write(WXmlEvent::characters(&self.uuid))?;
+        w.write(WXmlEvent::end_element())?;
+
+        w.write(WXmlEvent::start_element("Name"))?;
+        w.write(WXmlEvent::characters(&self.name))?;
+        w.write(WXmlEvent::end_element())?;
+
+        w.write(WXmlEvent::start_element("Notes"))?;
+        if self.notes.len() > 0 {
+            w.write(WXmlEvent::characters(&self.notes))?;
+        }
+        w.write(WXmlEvent::end_element())?;
+
+        w.write(WXmlEvent::start_element("IconID"))?;
+        w.write(WXmlEvent::characters(&self.icon_id.to_string()))?;
+        w.write(WXmlEvent::end_element())?;
+
+        w.write(WXmlEvent::start_element("IsExpanded"))?;
+        w.write(WXmlEvent::characters(&self.is_expanded.to_string()))?;
+        w.write(WXmlEvent::end_element())?;
+
+        // FIXME
+        w.write(WXmlEvent::start_element("DefaultAutoTypeSequence"))?;
+        w.write(WXmlEvent::end_element())?;
+
+        w.write(WXmlEvent::start_element("EnableAutoType"))?;
+        let val = match &self.enable_auto_type {
+            None => "null",
+            Some(true) => "True",
+            Some(false) => "False",
+        };
+        w.write(WXmlEvent::characters(&val))?;
+        w.write(WXmlEvent::end_element())?;
+
+        w.write(WXmlEvent::start_element("EnableSearching"))?;
+        let val = match &self.enable_searching {
+            None => "null",
+            Some(true) => "True",
+            Some(false) => "False",
+        };
+        w.write(WXmlEvent::characters(&val))?;
+        w.write(WXmlEvent::end_element())?;
+
+        w.write(WXmlEvent::start_element("LastTopVisibleGroup"))?;
+        w.write(WXmlEvent::characters(
+            &self.last_top_visible_entry.to_string(),
+        ))?;
+        w.write(WXmlEvent::end_element())?;
+
+        let start =
+            chrono::NaiveDateTime::parse_from_str("0001-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+                .unwrap()
+                .timestamp();
+        w.write(WXmlEvent::start_element("Times"))?;
+        for (key, value) in &self.times {
+            let mut ts_bytes = vec![];
+            ts_bytes.write_i64::<LittleEndian>(value.timestamp() - start)?;
+            w.write(WXmlEvent::start_element(key.as_str()))?;
+            w.write(WXmlEvent::characters(base64::encode(ts_bytes).as_str()))?;
+            w.write(WXmlEvent::end_element())?;
+        }
+        w.write(WXmlEvent::end_element())?;
+
+        for node in &self.children {
+            match node {
+                DBNode::Group(g) => g.serialize(w, encryptor)?,
+                DBNode::Entry(e) => e.serialize(w, encryptor)?,
+            };
+        }
+
+        w.write(WXmlEvent::end_element())?;
+        Ok(())
+    }
+}
+
+impl Serializable for Database {
+    fn serialize<W: Write>(
+        &self,
+        w: &mut EventWriter<W>,
+        encryptor: &mut dyn Cipher,
+    ) -> WResult<()> {
+        w.write(WXmlEvent::start_element("KeePassFile"))?;
+        self.meta.serialize(w, encryptor)?;
+        w.write(WXmlEvent::start_element("Root"))?;
+        self.root.serialize(w, encryptor)?;
+        w.write(WXmlEvent::end_element())?;
+        w.write(WXmlEvent::end_element())?;
+        Ok(())
+    }
+}
+
 fn parse_xml_timestamp(t: &str) -> Result<chrono::NaiveDateTime> {
     match chrono::NaiveDateTime::parse_from_str(t, "%Y-%m-%dT%H:%M:%SZ") {
         // Prior to KDBX4 file format, timestamps were stored as ISO 8601 strings
@@ -33,13 +268,24 @@ fn parse_xml_timestamp(t: &str) -> Result<chrono::NaiveDateTime> {
             // Cast the Vec created by base64::decode into the array expected by i64::from_le_bytes
             let mut a: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
             a.copy_from_slice(&v[0..8]);
+            let sec = i64::from_le_bytes(a);
             let ndt =
                 chrono::NaiveDateTime::parse_from_str("0001-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
                     .unwrap()
-                    + chrono::Duration::seconds(i64::from_le_bytes(a));
+                    + chrono::Duration::seconds(sec);
             Ok(ndt)
         }
     }
+}
+
+pub(crate) fn write_xml(d: &Database, encryptor: &mut dyn Cipher) -> WResult<Vec<u8>> {
+    let mut data = Vec::new();
+    let mut writer = EmitterConfig::new()
+        .perform_indent(true)
+        .create_writer(&mut data);
+
+    d.serialize(&mut writer, encryptor).unwrap();
+    Ok(data)
 }
 
 pub(crate) fn parse_xml_block(xml: &[u8], inner_cipher: &mut dyn Cipher) -> Result<(Group, Meta)> {
@@ -155,6 +401,12 @@ pub(crate) fn parse_xml_block(xml: &[u8], inner_cipher: &mut dyn Cipher) -> Resu
                             {
                                 // A Entry was finished - add Node to parent Group's children
                                 children.push(crate::Node::Entry(finished_entry))
+                            } else if let Some(&mut Node::Entry(Entry {
+                                ref mut history, ..
+                            })) = parsed_stack_head
+                            {
+                                //Entry nested in an Entry means we are working with History
+                                history.push(finished_entry)
                             }
                         }
 
@@ -210,13 +462,16 @@ pub(crate) fn parse_xml_block(xml: &[u8], inner_cipher: &mut dyn Cipher) -> Resu
                                 *expires = es;
                             }
                         }
-                        Node::UUID(r) => {
-                            if let Some(&mut Node::Group(Group { ref mut uuid, .. })) =
-                                parsed_stack_head
-                            {
+                        Node::UUID(r) => match parsed_stack_head {
+                            Some(&mut Node::Group(Group { ref mut uuid, .. })) => {
                                 *uuid = r;
                             }
-                        }
+                            Some(&mut Node::Entry(Entry { ref mut uuid, .. })) => {
+                                *uuid = r;
+                            }
+                            None => {}
+                            _ => {}
+                        },
                         Node::RecycleBinUUID(r) => {
                             if let Some(&mut Node::Meta(Meta {
                                 ref mut recyclebin_uuid,

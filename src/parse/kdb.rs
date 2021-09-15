@@ -1,7 +1,7 @@
 use crate::{
     config::OuterCipherSuite,
     crypt::kdf::Kdf,
-    db::{Database, Entry, Group, Header, InnerHeader, Meta, Node, NodeRefMut, Value},
+    db::{DBVersion, Database, Entry, Group, Header, InnerHeader, Meta, Node, NodeRefMut, Value},
     result::{DatabaseIntegrityError, Error, Result},
 };
 
@@ -10,7 +10,7 @@ use cipher::generic_array::GenericArray;
 
 use std::{collections::HashMap, convert::TryInto, str};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct KDBHeader {
     // https://gist.github.com/lgg/e6ccc6e212d18dd2ecd8a8c116fb1e45
     pub version: u32,
@@ -293,10 +293,7 @@ fn parse_entries(
 fn parse_db(header: &KDBHeader, data: &[u8]) -> Result<Group> {
     let mut root = Group {
         name: "Root".to_owned(),
-        children: Default::default(),
-        expires: Default::default(),
-        times: Default::default(),
-        uuid: Default::default(),
+        ..Default::default()
     };
 
     let mut pos = &data[..];
@@ -363,5 +360,6 @@ pub(crate) fn parse(data: &[u8], key_elements: &[Vec<u8>]) -> Result<Database> {
         meta: Meta {
             recyclebin_uuid: "".to_owned(),
         },
+        version: DBVersion::KDB2,
     })
 }

@@ -7,6 +7,7 @@ use salsa20::{cipher::NewCipher, Salsa20};
 
 pub(crate) trait Cipher {
     fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>>;
+    fn encrypt(&mut self, data: &[u8]) -> Result<Vec<u8>>;
 }
 
 type Aes256Cbc = Cbc<Aes256, Pkcs7>;
@@ -29,12 +30,17 @@ impl Cipher for AES256Cipher {
         let cipher = Aes256Cbc::new_from_slices(&self.key, &self.iv)
             .map_err(|e| Error::from(DatabaseIntegrityError::from(CryptoError::from(e))))?;
 
-        let mut buf = ciphertext.to_vec();
-        cipher
-            .decrypt(&mut buf)
+        let res = cipher
+            .decrypt_vec(&ciphertext)
             .map_err(|e| Error::from(DatabaseIntegrityError::from(CryptoError::from(e))))?;
 
-        Ok(buf)
+        Ok(res)
+    }
+    fn encrypt(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+        let cipher = Aes256Cbc::new_from_slices(&self.key, &self.iv)
+            .map_err(|e| Error::from(DatabaseIntegrityError::from(CryptoError::from(e))))?;
+
+        Ok(cipher.encrypt_vec(data))
     }
 }
 
@@ -58,12 +64,16 @@ impl Cipher for TwofishCipher {
         let cipher = TwofishCbc::new_from_slices(&self.key, &self.iv)
             .map_err(|e| Error::from(DatabaseIntegrityError::from(CryptoError::from(e))))?;
 
-        let mut buf = ciphertext.to_vec();
-        cipher
-            .decrypt(&mut buf)
+        let res = cipher
+            .decrypt_vec(&ciphertext)
             .map_err(|e| Error::from(DatabaseIntegrityError::from(CryptoError::from(e))))?;
 
-        Ok(buf)
+        Ok(res)
+    }
+    fn encrypt(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+        let cipher = TwofishCbc::new_from_slices(&self.key, &self.iv)
+            .map_err(|e| Error::from(DatabaseIntegrityError::from(CryptoError::from(e))))?;
+        Ok(cipher.encrypt_vec(data))
     }
 }
 
@@ -87,6 +97,9 @@ impl Cipher for Salsa20Cipher {
         let mut buffer = Vec::from(ciphertext);
         self.cipher.apply_keystream(&mut buffer);
         Ok(buffer)
+    }
+    fn encrypt(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+        self.decrypt(data)
     }
 }
 
@@ -122,6 +135,9 @@ impl Cipher for ChaCha20Cipher {
         self.cipher.apply_keystream(&mut buffer);
         Ok(buffer)
     }
+    fn encrypt(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+        self.decrypt(data)
+    }
 }
 
 pub(crate) struct PlainCipher;
@@ -134,4 +150,18 @@ impl Cipher for PlainCipher {
     fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         Ok(Vec::from(ciphertext))
     }
+    fn encrypt(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+        println!("Plain");
+        Ok(Vec::from(data))
+    }
+}
+
+#[test]
+fn test_decrypt_encrypt_plain() -> Result<()> {
+    let data = "hi this is a test";
+    let bdata: Vec<u8> = data.as_bytes().to_vec();
+    let encrypted = PlainCipher.encrypt(&bdata)?;
+    let decrypted = PlainCipher.decrypt(&encrypted)?;
+    assert_eq!(bdata, decrypted);
+    Ok(())
 }

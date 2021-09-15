@@ -11,21 +11,28 @@ use crate::{
     result::{DatabaseIntegrityError, Error, Result},
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Header {
     KDB(KDBHeader),
     KDBX3(KDBX3Header),
     KDBX4(KDBX4Header),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum InnerHeader {
     None,
     KDBX4(KDBX4InnerHeader),
 }
 
+#[derive(Debug, PartialEq)]
+pub enum DBVersion {
+    KDB2,
+    KDB3,
+    KDB4,
+}
+
 /// A decrypted KeePass database
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Database {
     /// Header information of the KeePass database
     pub header: Header,
@@ -38,6 +45,8 @@ pub struct Database {
 
     // Metadata of the KeePass database
     pub meta: Meta,
+
+    pub version: DBVersion,
 }
 
 impl Database {
@@ -83,6 +92,48 @@ impl Database {
             }
             .into()),
         }
+    }
+
+    pub(crate) fn get_decryptor(&self) -> Result<Box<dyn crypt::ciphers::Cipher>> {
+        let cipher = match self.version {
+            DBVersion::KDB3 => {
+                if let Header::KDBX3(h) = &self.header {
+                    h.decryptor()?
+                } else {
+                    Box::new(crypt::ciphers::PlainCipher::new(&Vec::new())?)
+                }
+            }
+            DBVersion::KDB4 => {
+                if let InnerHeader::KDBX4(header) = &self.inner_header {
+                    header.decryptor()?
+                } else {
+                    Box::new(crypt::ciphers::PlainCipher::new(&Vec::new())?)
+                }
+            }
+            _ => Box::new(crypt::ciphers::PlainCipher::new(&Vec::new())?),
+        };
+        Ok(cipher)
+    }
+    pub fn dump(
+        &self,
+        password: Option<&str>,
+        keyfile: Option<&mut dyn std::io::Read>,
+    ) -> Result<Vec<u8>> {
+        let mut key_elements: Vec<Vec<u8>> = Vec::new();
+
+        if let Some(p) = password {
+            key_elements.push(
+                crypt::calculate_sha256(&[p.as_bytes()])?
+                    .as_slice()
+                    .to_vec(),
+            );
+        }
+
+        if let Some(f) = keyfile {
+            key_elements.push(crate::keyfile::parse(f)?);
+        }
+        let key_elements: Vec<u8> = key_elements.into_iter().flatten().collect();
+        Ok(crate::parse::kdbx4::encrypt_xml(self, key_elements).unwrap())
     }
 
     /// Helper function to load a database into its internal XML chunks
@@ -139,6 +190,48 @@ impl Database {
 #[derive(Debug, Default, Eq, PartialEq)]
 pub struct Meta {
     pub recyclebin_uuid: String,
+    /*
+    <Generator>KeePassXC</Generator>
+    <DatabaseName>test</DatabaseName>
+    <DatabaseNameChanged>Kxa22A4AAAA=</DatabaseNameChanged>
+    <DatabaseDescription/>
+    <DatabaseDescriptionChanged>KBa22A4AAAA=</DatabaseDescriptionChanged>
+    <DefaultUserName/>
+    <DefaultUserNameChanged>KBa22A4AAAA=</DefaultUserNameChanged>
+    <MaintenanceHistoryDays>365</MaintenanceHistoryDays>
+    <Color/>
+    <MasterKeyChanged>OBa22A4AAAA=</MasterKeyChanged>
+    <MasterKeyChangeRec>-1</MasterKeyChangeRec>
+    <MasterKeyChangeForce>-1</MasterKeyChangeForce>
+    <MemoryProtection>
+        <ProtectTitle>False</ProtectTitle>
+        <ProtectUserName>False</ProtectUserName>
+        <ProtectPassword>True</ProtectPassword>
+        <ProtectURL>False</ProtectURL>
+        <ProtectNotes>False</ProtectNotes>
+    </MemoryProtection>
+    <CustomIcons/>
+    <RecycleBinEnabled>True</RecycleBinEnabled>
+    <RecycleBinUUID>wKpFYgcxR0WAHYSjJ4Iyhw==</RecycleBinUUID>
+    <RecycleBinChanged>mQrA2A4AAAA=</RecycleBinChanged>
+    <EntryTemplatesGroup>AAAAAAAAAAAAAAAAAAAAAA==</EntryTemplatesGroup>
+    <EntryTemplatesGroupChanged>KBa22A4AAAA=</EntryTemplatesGroupChanged>
+    <LastSelectedGroup>AAAAAAAAAAAAAAAAAAAAAA==</LastSelectedGroup>
+    <LastTopVisibleGroup>AAAAAAAAAAAAAAAAAAAAAA==</LastTopVisibleGroup>
+    <HistoryMaxItems>10</HistoryMaxItems>
+    <HistoryMaxSize>6291456</HistoryMaxSize>
+    <SettingsChanged>KBa22A4AAAA=</SettingsChanged>
+    <CustomData>
+        <Item>
+            <Key>_LAST_MODIFIED</Key>
+            <Value>Tue Aug 31 11:32:50 2021 GMT</Value>
+        </Item>
+        <Item>
+            <Key>KPXC_DECRYPTION_TIME_PREFERENCE</Key>
+            <Value>100</Value>
+        </Item>
+    </CustomData>
+    */
 }
 
 /// A database group with child groups and entries
@@ -163,6 +256,14 @@ pub struct Group {
 
     /// The unique identifier of the group
     pub uuid: String,
+
+    pub notes: String,
+    pub icon_id: u32,
+    pub is_expanded: bool,
+    // pub defaultAutoTypeSequence: bool,
+    pub enable_auto_type: Option<bool>,
+    pub enable_searching: Option<bool>,
+    pub last_top_visible_entry: String,
 }
 
 impl Group {
@@ -337,6 +438,9 @@ pub struct Entry {
     pub autotype: Option<AutoType>,
     pub expires: bool,
     pub times: HashMap<String, chrono::NaiveDateTime>,
+    pub uuid: String,
+    pub icon_id: u32,
+    pub history: Vec<Entry>,
 }
 
 impl<'a> Entry {

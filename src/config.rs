@@ -1,10 +1,12 @@
 use hex_literal::hex;
-use std::convert::TryFrom;
+use std::collections::HashMap;
+use std::convert::{From, TryFrom};
 
 use crate::{
-    crypt, decompress,
+    compress, crypt,
     result::{DatabaseIntegrityError, Error, Result},
     variant_dictionary::VariantDictionary,
+    variant_dictionary::VariantDictionaryValue,
 };
 
 const _CIPHERSUITE_AES128: [u8; 16] = hex!("61ab05a1946441c38d743a563df8dd35");
@@ -12,7 +14,7 @@ const CIPHERSUITE_AES256: [u8; 16] = hex!("31c1f2e6bf714350be5805216afc5aff");
 const CIPHERSUITE_TWOFISH: [u8; 16] = hex!("ad68f29f576f4bb9a36ad47af965346c");
 const CIPHERSUITE_CHACHA20: [u8; 16] = hex!("d6038a2b8b6f4cb5a524339a31dbb59a");
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum OuterCipherSuite {
     AES256,
     Twofish,
@@ -35,6 +37,15 @@ impl OuterCipherSuite {
     }
 }
 
+impl From<&OuterCipherSuite> for Vec<u8> {
+    fn from(c: &OuterCipherSuite) -> Vec<u8> {
+        match c {
+            OuterCipherSuite::AES256 => CIPHERSUITE_AES256.to_vec(),
+            OuterCipherSuite::Twofish => CIPHERSUITE_TWOFISH.to_vec(),
+            OuterCipherSuite::ChaCha20 => CIPHERSUITE_CHACHA20.to_vec(),
+        }
+    }
+}
 impl TryFrom<&[u8]> for OuterCipherSuite {
     type Error = Error;
     fn try_from(v: &[u8]) -> Result<OuterCipherSuite> {
@@ -50,7 +61,7 @@ impl TryFrom<&[u8]> for OuterCipherSuite {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum InnerCipherSuite {
     Plain,
     Salsa20,
@@ -80,7 +91,17 @@ impl TryFrom<u32> for InnerCipherSuite {
     }
 }
 
-#[derive(Debug)]
+impl From<&InnerCipherSuite> for u32 {
+    fn from(i: &InnerCipherSuite) -> u32 {
+        match i {
+            InnerCipherSuite::Plain => 0,
+            InnerCipherSuite::Salsa20 => 2,
+            InnerCipherSuite::ChaCha20 => 3,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub enum KdfSettings {
     Aes {
         seed: Vec<u8>,
@@ -163,18 +184,69 @@ impl TryFrom<VariantDictionary> for KdfSettings {
         }
     }
 }
+impl From<&KdfSettings> for VariantDictionary {
+    fn from(ks: &KdfSettings) -> VariantDictionary {
+        let mut data = HashMap::<String, VariantDictionaryValue>::new();
+        match ks {
+            KdfSettings::Aes { seed, rounds } => {
+                data.insert(
+                    "$UUID".to_string(),
+                    VariantDictionaryValue::ByteArray(KDF_AES_KDBX3.to_vec()),
+                );
+                // The only official UUID for this KDF is the KDBX3 one
+                // https://sourceforge.net/p/keepass/discussion/329220/thread/8df9a61d7f/?limit=25#f8f7
+                data.insert("R".to_string(), VariantDictionaryValue::UInt64(*rounds));
+                data.insert(
+                    "S".to_string(),
+                    VariantDictionaryValue::ByteArray(seed.clone()),
+                );
+            }
+            KdfSettings::Argon2 {
+                memory,
+                salt,
+                iterations,
+                parallelism,
+                version,
+            } => {
+                let mut data = HashMap::<String, VariantDictionaryValue>::new();
+                data.insert(
+                    "$UUID".to_string(),
+                    VariantDictionaryValue::ByteArray(KDF_ARGON2.to_vec()),
+                );
+                data.insert("M".to_string(), VariantDictionaryValue::UInt64(*memory));
+                data.insert(
+                    "S".to_string(),
+                    VariantDictionaryValue::ByteArray(salt.clone()),
+                );
+                data.insert("I".to_string(), VariantDictionaryValue::UInt64(*iterations));
+                data.insert(
+                    "P".to_string(),
+                    VariantDictionaryValue::UInt32(*parallelism),
+                );
 
-#[derive(Debug)]
+                let version = match version {
+                    argon2::Version::Version10 => 0x10,
+                    argon2::Version::Version13 => 0x13,
+                };
+                data.insert("V".to_string(), VariantDictionaryValue::UInt32(version));
+            }
+        };
+        VariantDictionary { data }
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub enum Compression {
     None,
     GZip,
 }
 
 impl Compression {
-    pub(crate) fn get_compression(&self) -> Box<dyn decompress::Decompress> {
+    pub(crate) fn get_compression(&self) -> Box<dyn compress::Compressible> {
         match self {
-            Compression::None => Box::new(decompress::NoCompression),
-            Compression::GZip => Box::new(decompress::GZipCompression),
+            // This has to return a decompressable/compressable
+            Compression::None => Box::new(compress::NoCompression),
+            Compression::GZip => Box::new(compress::GZipCompression),
         }
     }
 }
@@ -187,6 +259,15 @@ impl TryFrom<u32> for Compression {
             0 => Ok(Compression::None),
             1 => Ok(Compression::GZip),
             _ => Err(DatabaseIntegrityError::InvalidCompressionSuite { cid: v }.into()),
+        }
+    }
+}
+
+impl From<&Compression> for u32 {
+    fn from(c: &Compression) -> u32 {
+        match c {
+            Compression::None => 0,
+            Compression::GZip => 1,
         }
     }
 }

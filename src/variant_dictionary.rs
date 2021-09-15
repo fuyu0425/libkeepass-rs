@@ -1,11 +1,11 @@
 use crate::result::{DatabaseIntegrityError, Error, Result};
-use byteorder::{ByteOrder, LittleEndian};
+use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub(crate) struct VariantDictionary {
-    data: HashMap<String, VariantDictionaryValue>,
+    pub data: HashMap<String, VariantDictionaryValue>,
 }
 
 impl VariantDictionary {
@@ -61,6 +61,59 @@ impl VariantDictionary {
         }
 
         Ok(VariantDictionary { data })
+    }
+    pub(crate) fn serialize(&self) -> Result<Vec<u8>> {
+        // version
+        let mut data = vec![0, 0];
+        LittleEndian::write_u16(&mut data, 0x100);
+        // data
+        for (key, value) in &self.data {
+            // value type, u8
+            // key length: u32
+            // key: utf8 bytes
+            // value length, u32
+            // value -> bytes
+            let mut value_buf = vec![];
+            let value_type = match value {
+                VariantDictionaryValue::UInt32(el) => {
+                    value_buf.write_u32::<LittleEndian>(*el)?;
+                    0x04
+                }
+                VariantDictionaryValue::UInt64(el) => {
+                    value_buf.write_u64::<LittleEndian>(*el)?;
+                    0x05
+                }
+                VariantDictionaryValue::Bool(el) => {
+                    value_buf.push(if *el { 1 } else { 0 });
+                    0x08
+                }
+                VariantDictionaryValue::Int32(el) => {
+                    value_buf.write_i32::<LittleEndian>(*el)?;
+                    0x0c
+                }
+                VariantDictionaryValue::Int64(el) => {
+                    value_buf.write_i64::<LittleEndian>(*el)?;
+                    0x0d
+                }
+                VariantDictionaryValue::String(el) => {
+                    value_buf = el.as_bytes().to_vec();
+                    0x18
+                }
+                VariantDictionaryValue::ByteArray(el) => {
+                    value_buf = el.clone();
+                    0x42
+                }
+            };
+            data.push(value_type);
+            data.write_u32::<LittleEndian>(key.len() as u32)?;
+            data.extend(key.as_bytes());
+
+            data.write_u32::<LittleEndian>(value_buf.len() as u32)?;
+            data.extend(&value_buf);
+        }
+        // adding 1 byte as this is what KeepassXC does. Not sure why.
+        data.push(0);
+        Ok(data)
     }
 
     pub(crate) fn get<T>(&self, key: &str) -> Result<T>

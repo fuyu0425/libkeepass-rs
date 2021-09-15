@@ -30,6 +30,18 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
+  test:
+    name: Run 1 test on armv7
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: armv7-unknown-linux-musleabihf
+          override: true
       - uses: actions-rs/cargo@v1
         with:
-          command: test --release --target armv7-unknown-linux-musleabihf tests::kdbx4_entry
+          use-cross: true
+          command: test
+          args: --release --target armv7-unknown-linux-musleabihf tests::kdbx4_entry
