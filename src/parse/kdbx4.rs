@@ -479,7 +479,7 @@ mod test {
 
     use crate::{
         config::{Compression, InnerCipherSuite, KdfSettings, OuterCipherSuite},
-        db::Database,
+        db::{Database, Node},
         parse::kdbx4::*,
         result::Result,
     };

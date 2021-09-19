@@ -191,30 +191,8 @@ impl Database {
 pub struct Meta {
     pub recyclebin_uuid: String,
     pub unhandled_fields: HashMap<String, String>,
-    /*
-    <DatabaseName>test</DatabaseName>
-    <DatabaseDescription/>
-    <DefaultUserName/>
-    <Color/>
-    <MemoryProtection>
-        <ProtectTitle>False</ProtectTitle>
-        <ProtectUserName>False</ProtectUserName>
-        <ProtectPassword>True</ProtectPassword>
-        <ProtectURL>False</ProtectURL>
-        <ProtectNotes>False</ProtectNotes>
-    </MemoryProtection>
-    <CustomIcons/>
-    <CustomData>
-        <Item>
-            <Key>_LAST_MODIFIED</Key>
-            <Value>Tue Aug 31 11:32:50 2021 GMT</Value>
-        </Item>
-        <Item>
-            <Key>KPXC_DECRYPTION_TIME_PREFERENCE</Key>
-            <Value>100</Value>
-        </Item>
-    </CustomData>
-    */
+    pub custom_data: HashMap<String, String>,
+    pub memory_protection: HashMap<String, String>,
 }
 
 /// A database group with child groups and entries
@@ -418,6 +396,7 @@ pub struct Entry {
     pub uuid: String,
     pub history: Vec<Entry>,
     pub unhandled_fields: HashMap<String, String>,
+    pub custom_data: HashMap<String, String>,
 }
 
 impl<'a> Entry {

@@ -39,6 +39,15 @@ impl Serializable for Meta {
         w.write(WXmlEvent::characters(&self.recyclebin_uuid))?;
         w.write(WXmlEvent::end_element())?;
 
+        w.write(WXmlEvent::start_element("CustomData"))?;
+        for (k, v) in &self.custom_data {
+            w.write(WXmlEvent::start_element("Item"))?;
+            write_simple_element(w, "Key", k)?;
+            write_simple_element(w, "Value", v)?;
+            w.write(WXmlEvent::end_element())?;
+        }
+        w.write(WXmlEvent::end_element())?;
+
         for (k, v) in &self.unhandled_fields {
             w.write(WXmlEvent::start_element(k.as_str()))?;
             w.write(WXmlEvent::characters(v.as_str()))?;
@@ -132,6 +141,7 @@ impl Serializable for Entry {
                 .unwrap()
                 .timestamp();
         w.write(WXmlEvent::start_element("Times"))?;
+        // FIXME: missing UsageCount
         write_simple_element(w, "Expires", if self.expires { "True" } else { "False" })?;
 
         for (key, value) in &self.times {
@@ -142,6 +152,17 @@ impl Serializable for Entry {
             w.write(WXmlEvent::end_element())?;
         }
         w.write(WXmlEvent::end_element())?;
+
+        if !self.custom_data.is_empty() {
+            w.write(WXmlEvent::start_element("CustomData"))?;
+            for (k, v) in &self.custom_data {
+                w.write(WXmlEvent::start_element("Item"))?;
+                write_simple_element(w, "Key", k)?;
+                write_simple_element(w, "Value", v)?;
+                w.write(WXmlEvent::end_element())?;
+            }
+            w.write(WXmlEvent::end_element())?;
+        }
 
         w.write(WXmlEvent::end_element())?;
         Ok(())
@@ -252,7 +273,7 @@ fn parse_meta(e: &Element) -> Meta {
             match el.name.as_str() {
                 "RecycleBinUUID" => meta.recyclebin_uuid = get_text(el),
                 "MemoryProtection" => (), // FIXME
-                "CustomData" => (),       // FIXME
+                "CustomData" => meta.custom_data = get_items(el),
                 _ => {
                     meta.unhandled_fields.insert(el.name.clone(), get_text(el));
                 }
@@ -310,6 +331,29 @@ fn get_hashmap(e: &Element) -> HashMap<String, String> {
     }
     ret
 }
+fn get_items(e: &Element) -> HashMap<String, String> {
+    let mut ret = HashMap::new();
+
+    for node in &e.children {
+        // Item
+        if let XMLNode::Element(item_el) = node {
+            let mut k: Option<String> = None;
+            let mut v: Option<String> = None;
+            for node in &item_el.children {
+                if let XMLNode::Element(el) = node {
+                    match el.name.as_str() {
+                        "Key" => k = Some(get_text(el)),
+                        "Value" => v = Some(get_text(el)),
+                        _ => panic!("Found el {} when parsing KV pair", el.name),
+                    }
+                }
+            }
+            // blowing up if no key/value are found
+            ret.insert(k.unwrap(), v.unwrap());
+        }
+    }
+    ret
+}
 fn get_kv_pair(e: &Element, inner_cipher: &mut dyn Cipher) -> (String, Value) {
     let mut key: Option<String> = None;
     let mut val: Option<Value> = None;
@@ -357,7 +401,7 @@ fn parse_entry(e: &Element, inner_cipher: &mut dyn Cipher) -> Entry {
                 }
                 "AutoType" => entry.autotype = parse_autotype(el),
                 "History" => entry.history = parse_history(el, inner_cipher),
-                "CustomData" => (), // FIXME
+                "CustomData" => entry.custom_data = get_items(el),
                 _ => {
                     entry.unhandled_fields.insert(el.name.clone(), get_text(el));
                 }
