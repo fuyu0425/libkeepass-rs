@@ -214,6 +214,7 @@ pub struct Group {
 
     /// Does this group expire
     pub expires: bool,
+    pub usage_count: String,
 
     /// The unique identifier of the group
     pub uuid: String,
@@ -331,6 +332,7 @@ pub struct AutoType {
     pub enabled: bool,
     pub sequence: Option<String>,
     pub associations: Vec<AutoTypeAssociation>,
+    pub obfuscation: String,
 }
 
 /// A window association associated with an AutoType setting
@@ -392,6 +394,7 @@ pub struct Entry {
     pub fields: HashMap<String, Value>,
     pub autotype: Option<AutoType>,
     pub expires: bool,
+    pub usage_count: String,
     pub times: HashMap<String, chrono::NaiveDateTime>,
     pub uuid: String,
     pub history: Vec<Entry>,

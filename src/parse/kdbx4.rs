@@ -8,7 +8,7 @@ use std::convert::{TryFrom, TryInto};
 use crate::{
     config::{Compression, InnerCipherSuite, KdfSettings, OuterCipherSuite},
     crypt,
-    db::{DBVersion, Database, Header, InnerHeader, Node},
+    db::{DBVersion, Database, Header, InnerHeader},
     hmac_block_stream, parse,
     result::{DatabaseIntegrityError, Error, Result},
     variant_dictionary::VariantDictionary,

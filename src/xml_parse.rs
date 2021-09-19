@@ -39,6 +39,12 @@ impl Serializable for Meta {
         w.write(WXmlEvent::characters(&self.recyclebin_uuid))?;
         w.write(WXmlEvent::end_element())?;
 
+        w.write(WXmlEvent::start_element("MemoryProtection"))?;
+        for (k, v) in &self.memory_protection {
+            write_simple_element(w, k, v)?;
+        }
+        w.write(WXmlEvent::end_element())?;
+
         w.write(WXmlEvent::start_element("CustomData"))?;
         for (k, v) in &self.custom_data {
             w.write(WXmlEvent::start_element("Item"))?;
@@ -122,6 +128,7 @@ impl Serializable for Entry {
         if let Some(at) = &self.autotype {
             w.write(WXmlEvent::start_element("AutoType"))?;
             write_simple_element(w, "Enabled", if at.enabled { "True" } else { "False" })?;
+            write_simple_element(w, "DataTransferObfuscation", &at.obfuscation)?;
             if let Some(seq) = &at.sequence {
                 write_simple_element(w, "DefaultSequence", seq)?;
             }
@@ -141,8 +148,8 @@ impl Serializable for Entry {
                 .unwrap()
                 .timestamp();
         w.write(WXmlEvent::start_element("Times"))?;
-        // FIXME: missing UsageCount
         write_simple_element(w, "Expires", if self.expires { "True" } else { "False" })?;
+        write_simple_element(w, "UsageCount", &self.usage_count)?;
 
         for (key, value) in &self.times {
             let mut ts_bytes = vec![];
@@ -196,6 +203,7 @@ impl Serializable for Group {
                 .timestamp();
         w.write(WXmlEvent::start_element("Times"))?;
         write_simple_element(w, "Expires", if self.expires { "True" } else { "False" })?;
+        write_simple_element(w, "UsageCount", &self.usage_count)?;
         for (key, value) in &self.times {
             let mut ts_bytes = vec![];
             ts_bytes.write_i64::<LittleEndian>(value.timestamp() - start)?;
@@ -272,8 +280,8 @@ fn parse_meta(e: &Element) -> Meta {
         if let XMLNode::Element(el) = node {
             match el.name.as_str() {
                 "RecycleBinUUID" => meta.recyclebin_uuid = get_text(el),
-                "MemoryProtection" => (), // FIXME
                 "CustomData" => meta.custom_data = get_items(el),
+                "MemoryProtection" => meta.memory_protection = get_hashmap(el),
                 _ => {
                     meta.unhandled_fields.insert(el.name.clone(), get_text(el));
                 }
@@ -304,7 +312,7 @@ fn parse_autotype(e: &Element) -> Option<AutoType> {
             match el.name.as_str() {
                 "Enabled" => at.enabled = get_text(el) == "True",
                 "DefaultSequence" => at.sequence = Some(get_text(el)),
-                "DataTransferObfuscation" => (), // FIXME
+                "DataTransferObfuscation" => at.obfuscation = get_text(el),
                 "Association" => {
                     let a_hm = get_hashmap(el);
                     at.associations.push(AutoTypeAssociation {
@@ -391,9 +399,10 @@ fn parse_entry(e: &Element, inner_cipher: &mut dyn Cipher) -> Entry {
             match el.name.as_str() {
                 "UUID" => entry.uuid = get_text(el),
                 "Times" => {
-                    let (t, e) = parse_times(el);
+                    let (t, e, u) = parse_times(el);
                     entry.times = t;
                     entry.expires = e;
+                    entry.usage_count = u;
                 }
                 "String" => {
                     let (k, v) = get_kv_pair(el, inner_cipher);
@@ -425,9 +434,10 @@ fn get_text(e: &Element) -> String {
     "".to_string()
 }
 
-fn parse_times(e: &Element) -> (HashMap<String, chrono::NaiveDateTime>, bool) {
+fn parse_times(e: &Element) -> (HashMap<String, chrono::NaiveDateTime>, bool, String) {
     let mut times = HashMap::new();
     let mut expires = false;
+    let mut usage: String = String::from("");
 
     let time_fields = [
         "LastModificationTime",
@@ -443,13 +453,12 @@ fn parse_times(e: &Element) -> (HashMap<String, chrono::NaiveDateTime>, bool) {
                 times.insert(el.name.clone(), ts);
             } else if el.name == "Expires" {
                 expires = get_text(el) == "True";
+            } else if el.name == "UsageCount" {
+                usage = get_text(el);
             }
-            // FIXME: other
-            //		<Expires>False</Expires>
-            //		<UsageCount>0</UsageCount>
         }
     }
-    (times, expires)
+    (times, expires, usage)
 }
 
 fn parse_group(e: &Element, inner_cipher: &mut dyn Cipher) -> Group {
@@ -469,9 +478,10 @@ fn parse_group(e: &Element, inner_cipher: &mut dyn Cipher) -> Group {
                     .children
                     .push(Node::Entry(parse_entry(el, inner_cipher))),
                 "Times" => {
-                    let (t, e) = parse_times(el);
+                    let (t, e, u) = parse_times(el);
                     group.times = t;
                     group.expires = e;
+                    group.usage_count = u;
                 }
                 _ => {
                     group.unhandled_fields.insert(el.name.clone(), get_text(el));
