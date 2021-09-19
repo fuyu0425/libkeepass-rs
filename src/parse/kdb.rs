@@ -359,6 +359,7 @@ pub(crate) fn parse(data: &[u8], key_elements: &[Vec<u8>]) -> Result<Database> {
         root: root_group,
         meta: Meta {
             recyclebin_uuid: "".to_owned(),
+            ..Default::default()
         },
         version: DBVersion::KDB2,
     })

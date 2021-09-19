@@ -1,32 +1,16 @@
 use crate::crypt::ciphers::Cipher;
 use crate::result::{DatabaseIntegrityError, Error, Result};
 use byteorder::{LittleEndian, WriteBytesExt};
+use std::collections::HashMap;
+use xmltree::{Element, XMLNode};
 
 use secstr::SecStr;
 
-use xml::name::OwnedName;
-use xml::reader::{EventReader, XmlEvent};
 use xml::writer::{EmitterConfig, EventWriter, Result as WResult, XmlEvent as WXmlEvent};
 
 use std::io::Write;
 
-use super::db::{
-    AutoType, AutoTypeAssociation, Database, Entry, Group, Meta, Node as DBNode, Value,
-};
-
-#[derive(Debug)]
-enum Node {
-    Entry(Entry),
-    Group(Group),
-    KeyValue(String, Value),
-    AutoType(AutoType),
-    AutoTypeAssociation(AutoTypeAssociation),
-    ExpiryTime(String),
-    Expires(bool),
-    Meta(Meta),
-    UUID(String),
-    RecycleBinUUID(String),
-}
+use super::db::{AutoType, AutoTypeAssociation, Database, Entry, Group, Meta, Node, Value};
 
 pub(crate) trait Serializable {
     fn serialize<W: Write>(
@@ -54,7 +38,12 @@ impl Serializable for Meta {
         w.write(WXmlEvent::start_element("RecycleBinUUID"))?;
         w.write(WXmlEvent::characters(&self.recyclebin_uuid))?;
         w.write(WXmlEvent::end_element())?;
-        // some HashMap containing all unknown keys?
+
+        for (k, v) in &self.unhandled_fields {
+            w.write(WXmlEvent::start_element(k.as_str()))?;
+            w.write(WXmlEvent::characters(v.as_str()))?;
+            w.write(WXmlEvent::end_element())?;
+        }
 
         w.write(WXmlEvent::end_element())?;
         Ok(())
@@ -73,12 +62,11 @@ impl Serializable for Entry {
         w.write(WXmlEvent::characters(&self.uuid))?;
         w.write(WXmlEvent::end_element())?;
 
-        w.write(WXmlEvent::start_element("IconID"))?;
-        w.write(WXmlEvent::characters(&self.icon_id.to_string()))?;
-        w.write(WXmlEvent::end_element())?;
-
-        write_simple_element(w, "Expires", if self.expires { "True" } else { "False" })?;
-        // ForegroundColor, BackgroundColor, OverrideURL, Tags
+        for (k, v) in &self.unhandled_fields {
+            w.write(WXmlEvent::start_element(k.as_str()))?;
+            w.write(WXmlEvent::characters(v.as_str()))?;
+            w.write(WXmlEvent::end_element())?;
+        }
 
         for field_name in self.fields.keys() {
             w.write(WXmlEvent::start_element("String"))?;
@@ -144,6 +132,8 @@ impl Serializable for Entry {
                 .unwrap()
                 .timestamp();
         w.write(WXmlEvent::start_element("Times"))?;
+        write_simple_element(w, "Expires", if self.expires { "True" } else { "False" })?;
+
         for (key, value) in &self.times {
             let mut ts_bytes = vec![];
             ts_bytes.write_i64::<LittleEndian>(value.timestamp() - start)?;
@@ -173,53 +163,18 @@ impl Serializable for Group {
         w.write(WXmlEvent::characters(&self.name))?;
         w.write(WXmlEvent::end_element())?;
 
-        w.write(WXmlEvent::start_element("Notes"))?;
-        if self.notes.len() > 0 {
-            w.write(WXmlEvent::characters(&self.notes))?;
+        for (k, v) in &self.unhandled_fields {
+            w.write(WXmlEvent::start_element(k.as_str()))?;
+            w.write(WXmlEvent::characters(v.as_str()))?;
+            w.write(WXmlEvent::end_element())?;
         }
-        w.write(WXmlEvent::end_element())?;
-
-        w.write(WXmlEvent::start_element("IconID"))?;
-        w.write(WXmlEvent::characters(&self.icon_id.to_string()))?;
-        w.write(WXmlEvent::end_element())?;
-
-        w.write(WXmlEvent::start_element("IsExpanded"))?;
-        w.write(WXmlEvent::characters(&self.is_expanded.to_string()))?;
-        w.write(WXmlEvent::end_element())?;
-
-        // FIXME
-        w.write(WXmlEvent::start_element("DefaultAutoTypeSequence"))?;
-        w.write(WXmlEvent::end_element())?;
-
-        w.write(WXmlEvent::start_element("EnableAutoType"))?;
-        let val = match &self.enable_auto_type {
-            None => "null",
-            Some(true) => "True",
-            Some(false) => "False",
-        };
-        w.write(WXmlEvent::characters(&val))?;
-        w.write(WXmlEvent::end_element())?;
-
-        w.write(WXmlEvent::start_element("EnableSearching"))?;
-        let val = match &self.enable_searching {
-            None => "null",
-            Some(true) => "True",
-            Some(false) => "False",
-        };
-        w.write(WXmlEvent::characters(&val))?;
-        w.write(WXmlEvent::end_element())?;
-
-        w.write(WXmlEvent::start_element("LastTopVisibleGroup"))?;
-        w.write(WXmlEvent::characters(
-            &self.last_top_visible_entry.to_string(),
-        ))?;
-        w.write(WXmlEvent::end_element())?;
 
         let start =
             chrono::NaiveDateTime::parse_from_str("0001-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
                 .unwrap()
                 .timestamp();
         w.write(WXmlEvent::start_element("Times"))?;
+        write_simple_element(w, "Expires", if self.expires { "True" } else { "False" })?;
         for (key, value) in &self.times {
             let mut ts_bytes = vec![];
             ts_bytes.write_i64::<LittleEndian>(value.timestamp() - start)?;
@@ -231,8 +186,8 @@ impl Serializable for Group {
 
         for node in &self.children {
             match node {
-                DBNode::Group(g) => g.serialize(w, encryptor)?,
-                DBNode::Entry(e) => e.serialize(w, encryptor)?,
+                Node::Group(g) => g.serialize(w, encryptor)?,
+                Node::Entry(e) => e.serialize(w, encryptor)?,
             };
         }
 
@@ -288,280 +243,226 @@ pub(crate) fn write_xml(d: &Database, encryptor: &mut dyn Cipher) -> WResult<Vec
     Ok(data)
 }
 
-pub(crate) fn parse_xml_block(xml: &[u8], inner_cipher: &mut dyn Cipher) -> Result<(Group, Meta)> {
-    // Result<Group, Option<Group>> {
-    let parser = EventReader::new(xml);
-
-    // Stack of parsed Node objects not yet associated with their parent
-    let mut parsed_stack: Vec<Node> = vec![];
-
-    // Stack of XML element names
-    let mut xml_stack: Vec<String> = vec![];
-
-    let mut root_group: Group = Default::default();
-    let mut meta: Meta = Default::default();
-
-    for e in parser {
-        match e.unwrap() {
-            XmlEvent::StartElement {
-                name: OwnedName { ref local_name, .. },
-                ref attributes,
-                ..
-            } => {
-                xml_stack.push(local_name.clone());
-
-                match &local_name[..] {
-                    "Meta" => parsed_stack.push(Node::Meta(Default::default())),
-                    "UUID" => parsed_stack.push(Node::UUID(String::new())),
-                    "RecycleBinUUID" => parsed_stack.push(Node::RecycleBinUUID(String::new())),
-                    "Group" => parsed_stack.push(Node::Group(Default::default())),
-                    "Entry" => parsed_stack.push(Node::Entry(Default::default())),
-                    "String" => parsed_stack.push(Node::KeyValue(
-                        String::new(),
-                        Value::Unprotected(String::new()),
-                    )),
-                    "Value" => {
-                        // Are we encountering a protected value?
-                        if attributes
-                            .iter()
-                            .find(|oa| oa.name.local_name == "Protected")
-                            .map(|oa| &oa.value)
-                            .map_or(false, |v| v.to_lowercase().parse::<bool>().unwrap_or(false))
-                        {
-                            // Transform value to a Value::Protected
-                            if let Some(&mut Node::KeyValue(_, ref mut ev)) =
-                                parsed_stack.last_mut()
-                            {
-                                *ev = Value::Protected(SecStr::new(vec![]));
-                            }
-                        }
-                    }
-                    "AutoType" => parsed_stack.push(Node::AutoType(Default::default())),
-                    "Association" => {
-                        parsed_stack.push(Node::AutoTypeAssociation(Default::default()))
-                    }
-                    "ExpiryTime" => parsed_stack.push(Node::ExpiryTime(String::new())),
-                    "Expires" => parsed_stack.push(Node::Expires(bool::default())),
-                    _ => {}
+fn parse_meta(e: &Element) -> Meta {
+    let mut meta = Meta {
+        ..Default::default()
+    };
+    for node in &e.children {
+        if let XMLNode::Element(el) = node {
+            match el.name.as_str() {
+                "RecycleBinUUID" => meta.recyclebin_uuid = get_text(el),
+                "MemoryProtection" => (), // FIXME
+                "CustomData" => (),       // FIXME
+                _ => {
+                    meta.unhandled_fields.insert(el.name.clone(), get_text(el));
                 }
             }
+        }
+    }
+    meta
+}
 
-            XmlEvent::EndElement {
-                name: OwnedName { ref local_name, .. },
-            } => {
-                xml_stack.pop();
-
-                if [
-                    "Group",
-                    "Entry",
-                    "String",
-                    "AutoType",
-                    "Association",
-                    "ExpiryTime",
-                    "Expires",
-                    "Meta",
-                    "RecycleBinUUID",
-                    "UUID",
-                ]
-                .contains(&&local_name[..])
-                {
-                    let finished_node = parsed_stack.pop().unwrap();
-                    let parsed_stack_head = parsed_stack.last_mut();
-
-                    match finished_node {
-                        Node::KeyValue(k, v) => {
-                            if let Some(&mut Node::Entry(Entry { ref mut fields, .. })) =
-                                parsed_stack_head
-                            {
-                                // A KeyValue was finished inside of an Entry -> add a field
-                                fields.insert(k, v);
-                            }
-                        }
-
-                        Node::Group(finished_group) => {
-                            match parsed_stack_head {
-                                Some(&mut Node::Group(Group {
-                                    ref mut children, ..
-                                })) => {
-                                    // A Group was finished - add Group to children
-                                    children.push(crate::Node::Group(finished_group));
-                                }
-                                None => {
-                                    // There is no more parent nodes left -> we are at the root
-                                    root_group = finished_group;
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        Node::Entry(finished_entry) => {
-                            if let Some(&mut Node::Group(Group {
-                                ref mut children, ..
-                            })) = parsed_stack_head
-                            {
-                                // A Entry was finished - add Node to parent Group's children
-                                children.push(crate::Node::Entry(finished_entry))
-                            } else if let Some(&mut Node::Entry(Entry {
-                                ref mut history, ..
-                            })) = parsed_stack_head
-                            {
-                                //Entry nested in an Entry means we are working with History
-                                history.push(finished_entry)
-                            }
-                        }
-
-                        Node::AutoType(at) => {
-                            if let Some(&mut Node::Entry(Entry {
-                                ref mut autotype, ..
-                            })) = parsed_stack_head
-                            {
-                                autotype.replace(at);
-                            }
-                        }
-
-                        Node::AutoTypeAssociation(ata) => {
-                            if let Some(&mut Node::AutoType(AutoType {
-                                ref mut associations,
-                                ..
-                            })) = parsed_stack_head
-                            {
-                                associations.push(ata);
-                            }
-                        }
-
-                        Node::ExpiryTime(et) => {
-                            // Currently ingoring any Err() from parse_xml_timestamp()
-                            // Ignoring Err() to avoid possible regressions for existing users
-                            if let Some(&mut Node::Entry(Entry { ref mut times, .. })) =
-                                parsed_stack_head
-                            {
-                                match parse_xml_timestamp(&et) {
-                                    Ok(t) => times.insert("ExpiryTime".to_owned(), t),
-                                    _ => None,
-                                };
-                            } else if let Some(&mut Node::Group(Group { ref mut times, .. })) =
-                                parsed_stack_head
-                            {
-                                match parse_xml_timestamp(&et) {
-                                    Ok(t) => times.insert("ExpiryTime".to_owned(), t),
-                                    _ => None,
-                                };
-                            }
-                        }
-
-                        Node::Expires(es) => {
-                            if let Some(&mut Node::Entry(Entry {
-                                ref mut expires, ..
-                            })) = parsed_stack_head
-                            {
-                                *expires = es;
-                            } else if let Some(&mut Node::Group(Group {
-                                ref mut expires, ..
-                            })) = parsed_stack_head
-                            {
-                                *expires = es;
-                            }
-                        }
-                        Node::UUID(r) => match parsed_stack_head {
-                            Some(&mut Node::Group(Group { ref mut uuid, .. })) => {
-                                *uuid = r;
-                            }
-                            Some(&mut Node::Entry(Entry { ref mut uuid, .. })) => {
-                                *uuid = r;
-                            }
-                            None => {}
-                            _ => {}
-                        },
-                        Node::RecycleBinUUID(r) => {
-                            if let Some(&mut Node::Meta(Meta {
-                                ref mut recyclebin_uuid,
-                                ..
-                            })) = parsed_stack_head
-                            {
-                                *recyclebin_uuid = r;
-                            }
-                        }
-
-                        Node::Meta(m) => {
-                            meta = m;
-                        }
-                    }
-                }
+fn parse_history(e: &Element, inner_cipher: &mut dyn Cipher) -> Vec<Entry> {
+    let mut res = Vec::new();
+    for node in &e.children {
+        if let XMLNode::Element(el) = node {
+            match el.name.as_str() {
+                "Entry" => res.push(parse_entry(el, inner_cipher)),
+                _ => panic!("Found {} when parsing history", el.name),
             }
+        }
+    }
+    res
+}
+fn parse_autotype(e: &Element) -> Option<AutoType> {
+    let mut at = AutoType {
+        ..Default::default()
+    };
+    for node in &e.children {
+        if let XMLNode::Element(el) = node {
+            match el.name.as_str() {
+                "Enabled" => at.enabled = get_text(el) == "True",
+                "DefaultSequence" => at.sequence = Some(get_text(el)),
+                "DataTransferObfuscation" => (), // FIXME
+                "Association" => {
+                    let a_hm = get_hashmap(el);
+                    at.associations.push(AutoTypeAssociation {
+                        window: a_hm.get("Window").map(String::to_owned),
+                        sequence: a_hm.get("KeystrokeSequence").map(String::to_owned),
+                    });
+                }
+                _ => panic!(
+                    "Found unhandled element {} when parsing autotype for {:?}",
+                    el.name, e
+                ),
+            }
+        }
+    }
+    Some(at)
+}
 
-            XmlEvent::Characters(c) => {
-                // Got some character data that need to be matched to a Node on the parsed_stack.
+fn get_hashmap(e: &Element) -> HashMap<String, String> {
+    let mut ret = HashMap::new();
+    for node in &e.children {
+        if let XMLNode::Element(el) = node {
+            ret.insert(el.name.clone(), get_text(el));
+        }
+    }
+    ret
+}
+fn get_kv_pair(e: &Element, inner_cipher: &mut dyn Cipher) -> (String, Value) {
+    let mut key: Option<String> = None;
+    let mut val: Option<Value> = None;
 
-                match (xml_stack.last().map(|s| &s[..]), parsed_stack.last_mut()) {
-                    (Some("Name"), Some(&mut Node::Group(Group { ref mut name, .. }))) => {
-                        // Got a "Name" element with a Node::Group on the parsed_stack
-                        // Update the Group's name
-                        *name = c;
-                    }
-                    (Some("ExpiryTime"), Some(&mut Node::ExpiryTime(ref mut et))) => {
-                        *et = c;
-                    }
-                    (Some("Expires"), Some(&mut Node::Expires(ref mut es))) => {
-                        *es = c == "True";
-                    }
-                    (Some("Key"), Some(&mut Node::KeyValue(ref mut k, _))) => {
-                        // Got a "Key" element with a Node::KeyValue on the parsed_stack
-                        // Update the KeyValue's key
-                        *k = c;
-                    }
-                    (Some("Value"), Some(&mut Node::KeyValue(_, ref mut ev))) => {
-                        // Got a "Value" element with a Node::KeyValue on the parsed_stack
-                        // Update the KeyValue's value
-
-                        match *ev {
-                            Value::Bytes(_) => {} // not possible
-                            Value::Unprotected(ref mut v) => {
-                                *v = c;
-                            }
-                            Value::Protected(ref mut v) => {
-                                // Use the decryptor to decrypt the protected
-                                // and base64-encoded value
-                                //
-                                let buf = base64::decode(&c)
-                                    .map_err(|e| Error::from(DatabaseIntegrityError::from(e)))?;
-
-                                let buf_decode = inner_cipher.decrypt(&buf)?;
-
-                                let c_decode = std::str::from_utf8(&buf_decode)
-                                    .map_err(|e| Error::from(DatabaseIntegrityError::from(e)))?;
-
-                                *v = SecStr::from(c_decode);
-                            }
+    for node in &e.children {
+        if let XMLNode::Element(el) = node {
+            match el.name.as_str() {
+                "Key" => key = Some(get_text(el)),
+                "Value" => {
+                    if let Some(p) = el.attributes.get("Protected") {
+                        if p == "True" {
+                            let enc_bytes = base64::decode(get_text(el)).unwrap();
+                            let dec_bytes = inner_cipher.decrypt(&enc_bytes).unwrap();
+                            val = Some(Value::Protected(SecStr::new(dec_bytes)));
+                            break;
                         }
                     }
-                    (Some("UUID"), Some(&mut Node::UUID(ref mut et))) => {
-                        *et = c;
-                    }
-                    (Some("RecycleBinUUID"), Some(&mut Node::RecycleBinUUID(ref mut et))) => {
-                        *et = c;
-                    }
-                    (Some("Enabled"), Some(&mut Node::AutoType(ref mut at))) => {
-                        at.enabled = c.parse().unwrap_or(false);
-                    }
-                    (Some("DefaultSequence"), Some(&mut Node::AutoType(ref mut at))) => {
-                        at.sequence = Some(c.to_owned());
-                    }
-                    (Some("Window"), Some(&mut Node::AutoTypeAssociation(ref mut ata))) => {
-                        ata.window = Some(c.to_owned());
-                    }
-                    (
-                        Some("KeystrokeSequence"),
-                        Some(&mut Node::AutoTypeAssociation(ref mut ata)),
-                    ) => {
-                        ata.sequence = Some(c.to_owned());
-                    }
-                    _ => {}
+                    val = Some(Value::Unprotected(get_text(el)));
                 }
+                _ => panic!("Found el {} when parsing KV pair", el.name),
             }
-
-            _ => {}
         }
     }
 
+    // blowing up if no key/value are found
+    (key.unwrap(), val.unwrap())
+}
+
+fn parse_entry(e: &Element, inner_cipher: &mut dyn Cipher) -> Entry {
+    let mut entry = Entry {
+        ..Default::default()
+    };
+    for node in &e.children {
+        if let XMLNode::Element(el) = node {
+            match el.name.as_str() {
+                "UUID" => entry.uuid = get_text(el),
+                "Times" => {
+                    let (t, e) = parse_times(el);
+                    entry.times = t;
+                    entry.expires = e;
+                }
+                "String" => {
+                    let (k, v) = get_kv_pair(el, inner_cipher);
+                    entry.fields.insert(k, v);
+                }
+                "AutoType" => entry.autotype = parse_autotype(el),
+                "History" => entry.history = parse_history(el, inner_cipher),
+                "CustomData" => (), // FIXME
+                _ => {
+                    entry.unhandled_fields.insert(el.name.clone(), get_text(el));
+                }
+            }
+        }
+    }
+    entry
+}
+fn get_text(e: &Element) -> String {
+    let mut _s: String;
+    for node in &e.children {
+        if let XMLNode::Text(s) = node {
+            return s.clone();
+        }
+
+        panic!(
+            "Found a non-text child item when parsing {:?} - {:?}",
+            node, e
+        );
+    }
+    "".to_string()
+}
+
+fn parse_times(e: &Element) -> (HashMap<String, chrono::NaiveDateTime>, bool) {
+    let mut times = HashMap::new();
+    let mut expires = false;
+
+    let time_fields = [
+        "LastModificationTime",
+        "CreationTime",
+        "LastAccessTime",
+        "ExpiryTime",
+        "LocationChanged",
+    ];
+    for node in &e.children {
+        if let XMLNode::Element(el) = node {
+            if time_fields.contains(&el.name.as_str()) {
+                let ts = parse_xml_timestamp(&get_text(el)).unwrap();
+                times.insert(el.name.clone(), ts);
+            } else if el.name == "Expires" {
+                expires = get_text(el) == "True";
+            }
+            // FIXME: other
+            //		<Expires>False</Expires>
+            //		<UsageCount>0</UsageCount>
+        }
+    }
+    (times, expires)
+}
+
+fn parse_group(e: &Element, inner_cipher: &mut dyn Cipher) -> Group {
+    let mut group = Group {
+        ..Default::default()
+    };
+
+    for node in &e.children {
+        if let XMLNode::Element(el) = node {
+            match el.name.as_str() {
+                "UUID" => group.uuid = get_text(el),
+                "Name" => group.name = get_text(el),
+                "Group" => group
+                    .children
+                    .push(Node::Group(parse_group(el, inner_cipher))),
+                "Entry" => group
+                    .children
+                    .push(Node::Entry(parse_entry(el, inner_cipher))),
+                "Times" => {
+                    let (t, e) = parse_times(el);
+                    group.times = t;
+                    group.expires = e;
+                }
+                _ => {
+                    group.unhandled_fields.insert(el.name.clone(), get_text(el));
+                }
+            }
+        }
+    }
+    group
+}
+fn parse_root(e: &Element, inner_cipher: &mut dyn Cipher) -> Group {
+    let mut root = Group {
+        ..Default::default()
+    };
+    for node in &e.children {
+        if let XMLNode::Element(el) = node {
+            match el.name.as_str() {
+                "Group" => root = parse_group(el, inner_cipher),
+                _ => println!("<root> Found unknown element! {}", el.name),
+            }
+        }
+    }
+    root
+}
+pub(crate) fn parse_xml_block(xml: &[u8], inner_cipher: &mut dyn Cipher) -> Result<(Group, Meta)> {
+    let mut root_group: Group = Default::default();
+    let mut meta: Meta = Default::default();
+    let root_el = Element::parse(xml).unwrap();
+    for node in &root_el.children {
+        if let XMLNode::Element(el) = node {
+            match el.name.as_str() {
+                "Root" => root_group = parse_root(el, inner_cipher),
+                "Meta" => meta = parse_meta(el),
+                _ => panic!("Found unknown element! {}", el.name),
+            }
+        }
+    }
     Ok((root_group, meta))
 }

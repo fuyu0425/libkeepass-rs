@@ -190,19 +190,12 @@ impl Database {
 #[derive(Debug, Default, Eq, PartialEq)]
 pub struct Meta {
     pub recyclebin_uuid: String,
+    pub unhandled_fields: HashMap<String, String>,
     /*
-    <Generator>KeePassXC</Generator>
     <DatabaseName>test</DatabaseName>
-    <DatabaseNameChanged>Kxa22A4AAAA=</DatabaseNameChanged>
     <DatabaseDescription/>
-    <DatabaseDescriptionChanged>KBa22A4AAAA=</DatabaseDescriptionChanged>
     <DefaultUserName/>
-    <DefaultUserNameChanged>KBa22A4AAAA=</DefaultUserNameChanged>
-    <MaintenanceHistoryDays>365</MaintenanceHistoryDays>
     <Color/>
-    <MasterKeyChanged>OBa22A4AAAA=</MasterKeyChanged>
-    <MasterKeyChangeRec>-1</MasterKeyChangeRec>
-    <MasterKeyChangeForce>-1</MasterKeyChangeForce>
     <MemoryProtection>
         <ProtectTitle>False</ProtectTitle>
         <ProtectUserName>False</ProtectUserName>
@@ -211,16 +204,6 @@ pub struct Meta {
         <ProtectNotes>False</ProtectNotes>
     </MemoryProtection>
     <CustomIcons/>
-    <RecycleBinEnabled>True</RecycleBinEnabled>
-    <RecycleBinUUID>wKpFYgcxR0WAHYSjJ4Iyhw==</RecycleBinUUID>
-    <RecycleBinChanged>mQrA2A4AAAA=</RecycleBinChanged>
-    <EntryTemplatesGroup>AAAAAAAAAAAAAAAAAAAAAA==</EntryTemplatesGroup>
-    <EntryTemplatesGroupChanged>KBa22A4AAAA=</EntryTemplatesGroupChanged>
-    <LastSelectedGroup>AAAAAAAAAAAAAAAAAAAAAA==</LastSelectedGroup>
-    <LastTopVisibleGroup>AAAAAAAAAAAAAAAAAAAAAA==</LastTopVisibleGroup>
-    <HistoryMaxItems>10</HistoryMaxItems>
-    <HistoryMaxSize>6291456</HistoryMaxSize>
-    <SettingsChanged>KBa22A4AAAA=</SettingsChanged>
     <CustomData>
         <Item>
             <Key>_LAST_MODIFIED</Key>
@@ -257,13 +240,7 @@ pub struct Group {
     /// The unique identifier of the group
     pub uuid: String,
 
-    pub notes: String,
-    pub icon_id: u32,
-    pub is_expanded: bool,
-    // pub defaultAutoTypeSequence: bool,
-    pub enable_auto_type: Option<bool>,
-    pub enable_searching: Option<bool>,
-    pub last_top_visible_entry: String,
+    pub unhandled_fields: HashMap<String, String>,
 }
 
 impl Group {
@@ -439,8 +416,8 @@ pub struct Entry {
     pub expires: bool,
     pub times: HashMap<String, chrono::NaiveDateTime>,
     pub uuid: String,
-    pub icon_id: u32,
     pub history: Vec<Entry>,
+    pub unhandled_fields: HashMap<String, String>,
 }
 
 impl<'a> Entry {

@@ -178,6 +178,7 @@ pub(crate) fn parse(data: &[u8], key_elements: &[Vec<u8>]) -> Result<Database> {
     let mut inner_decryptor = header.inner_cipher.get_cipher(&stream_key)?;
     let mut meta = Meta {
         recyclebin_uuid: Default::default(),
+        ..Default::default()
     };
 
     let mut root = Group {

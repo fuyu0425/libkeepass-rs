@@ -8,7 +8,7 @@ use std::convert::{TryFrom, TryInto};
 use crate::{
     config::{Compression, InnerCipherSuite, KdfSettings, OuterCipherSuite},
     crypt,
-    db::{DBVersion, Database, Header, InnerHeader},
+    db::{DBVersion, Database, Header, InnerHeader, Node},
     hmac_block_stream, parse,
     result::{DatabaseIntegrityError, Error, Result},
     variant_dictionary::VariantDictionary,
@@ -506,11 +506,40 @@ mod test {
         let parsed_db = parse(&encrypted, &[key_elements]).unwrap();
 
         assert_eq!(parsed_db.inner_header, db.inner_header);
-        assert_eq!(parsed_db.root, db.root);
-
         assert_eq!(parsed_db.meta, db.meta);
         assert_eq!(parsed_db.version, db.version);
         assert_eq!(parsed_db.header, db.header);
+
+        assert_eq!(parsed_db.root.name, db.root.name);
+        assert_eq!(parsed_db.root.children.len(), db.root.children.len());
+
+        for i in 0..parsed_db.root.children.len() {
+            let p_child = &parsed_db.root.children[i];
+            let orig_child = &db.root.children[i];
+            match p_child {
+                Node::Entry(e) => {
+                    if let Node::Entry(og) = orig_child {
+                        assert_eq!(og.uuid, e.uuid);
+                        assert_eq!(og.fields, e.fields);
+                        assert_eq!(og.unhandled_fields, e.unhandled_fields);
+                    } else {
+                        panic!("aaa");
+                    }
+                }
+                Node::Group(g) => {
+                    if let Node::Group(og) = orig_child {
+                        assert_eq!(og.name, g.name);
+                        assert_eq!(og.uuid, g.uuid);
+                        assert_eq!(og.unhandled_fields, g.unhandled_fields);
+                    } else {
+                        panic!("bbb");
+                    }
+                }
+            }
+            assert_eq!(p_child, orig_child);
+        }
+        assert_eq!(parsed_db.root, db.root);
+
         assert_eq!(parsed_db, db);
         Ok(())
     }
