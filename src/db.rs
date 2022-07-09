@@ -190,6 +190,7 @@ impl Database {
 #[derive(Debug, Default, Eq, PartialEq)]
 pub struct Meta {
     pub recyclebin_uuid: String,
+    pub binaries: Vec<Vec<u8>>,
     pub unhandled_fields: HashMap<String, String>,
     pub custom_data: HashMap<String, String>,
     pub memory_protection: HashMap<String, String>,
@@ -241,28 +242,21 @@ impl Group {
         } else {
             if path.len() == 1 {
                 let head = path[0];
-                self.children
-                    .iter()
-                    .filter_map(|n| match n {
-                        Node::Group(_) => None,
-                        Node::Entry(e) => {
-                            e.get_title()
-                                .and_then(|t| if t == head { Some(n.to_ref()) } else { None })
-                        }
-                    })
-                    .next()
+                self.children.iter().find_map(|n| match n {
+                    Node::Group(_) => None,
+                    Node::Entry(e) => {
+                        e.get_title()
+                            .and_then(|t| if t == head { Some(n.to_ref()) } else { None })
+                    }
+                })
             } else {
                 let head = path[0];
                 let tail = &path[1..path.len()];
 
-                let head_group = self
-                    .children
-                    .iter()
-                    .filter_map(|n| match n {
-                        Node::Group(g) if g.name == head => Some(g),
-                        _ => None,
-                    })
-                    .next()?;
+                let head_group = self.children.iter().find_map(|n| match n {
+                    Node::Group(g) if g.name == head => Some(g),
+                    _ => None,
+                })?;
 
                 head_group.get(tail)
             }
@@ -289,14 +283,10 @@ impl Group {
                 let head = path[0];
                 let tail = &path[1..path.len()];
 
-                let head_group: &mut Group = self
-                    .children
-                    .iter_mut()
-                    .filter_map(|n| match n {
-                        Node::Group(g) if g.name == head => Some(g),
-                        _ => None,
-                    })
-                    .next()?;
+                let head_group: &mut Group = self.children.iter_mut().find_map(|n| match n {
+                    Node::Group(g) if g.name == head => Some(g),
+                    _ => None,
+                })?;
 
                 head_group.get_mut(tail)
             }
@@ -400,6 +390,7 @@ pub struct Entry {
     pub history: Vec<Entry>,
     pub unhandled_fields: HashMap<String, String>,
     pub custom_data: HashMap<String, String>,
+    pub binary_refs: HashMap<String, usize>,
 }
 
 impl<'a> Entry {
@@ -452,6 +443,26 @@ impl<'a> Entry {
     /// Convenience method for getting the value of the 'Password' field
     pub fn get_password(&'a self) -> Option<&'a str> {
         self.get("Password")
+    }
+
+    pub fn get_binary<'b>(&'a self, key: &str, db: &'b Database) -> Option<&'b [u8]> {
+        let opt_key = self.binary_refs.get(key)?;
+
+        match db.version {
+            DBVersion::KDB3 => {
+                let b = db.meta.binaries.get(opt_key.clone())?;
+                Some(&b)
+            }
+            DBVersion::KDB4 => {
+                if let InnerHeader::KDBX4(header) = &db.inner_header {
+                    let b = header.binaries.get(opt_key.clone())?;
+                    Some(&b.content)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 }
 

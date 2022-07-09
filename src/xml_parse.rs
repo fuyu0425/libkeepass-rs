@@ -1,7 +1,9 @@
 use crate::crypt::ciphers::Cipher;
 use crate::result::{DatabaseIntegrityError, Error, Result};
 use byteorder::{LittleEndian, WriteBytesExt};
+use flate2::read::GzDecoder;
 use std::collections::HashMap;
+use std::io::Read;
 use xmltree::{Element, XMLNode};
 
 use secstr::SecStr;
@@ -272,6 +274,13 @@ pub(crate) fn write_xml(d: &Database, encryptor: &mut dyn Cipher) -> WResult<Vec
     Ok(data)
 }
 
+fn decompress(in_buffer: &[u8]) -> Result<Vec<u8>> {
+    let mut res = Vec::new();
+    let mut decoder = GzDecoder::new(in_buffer);
+    decoder.read_to_end(&mut res)?;
+    Ok(res)
+}
+
 fn parse_meta(e: &Element) -> Meta {
     let mut meta = Meta {
         ..Default::default()
@@ -282,7 +291,24 @@ fn parse_meta(e: &Element) -> Meta {
                 "RecycleBinUUID" => meta.recyclebin_uuid = get_text(el),
                 "CustomData" => meta.custom_data = get_items(el),
                 "MemoryProtection" => meta.memory_protection = get_hashmap(el),
+                "Binaries" => {
+                    for bin_node in &el.children {
+                        if let XMLNode::Element(el) = bin_node {
+                            let compressed = el.attributes.get("Compressed").unwrap() == "True";
+                            let raw_data = base64::decode(get_text(el)).unwrap();
+                            let data;
+                            if compressed {
+                                data = decompress(&raw_data).unwrap();
+                            } else {
+                                data = raw_data;
+                            }
+
+                            meta.binaries.push(data);
+                        }
+                    }
+                }
                 _ => {
+                    println!("Unhandled field {}", el.name);
                     meta.unhandled_fields.insert(el.name.clone(), get_text(el));
                 }
             }
@@ -362,6 +388,24 @@ fn get_items(e: &Element) -> HashMap<String, String> {
     }
     ret
 }
+fn get_entry_binary_ref(e: &Element) -> (String, String) {
+    let mut key: Option<String> = None;
+    let mut val: Option<&String> = None;
+
+    for node in &e.children {
+        if let XMLNode::Element(el) = node {
+            match el.name.as_str() {
+                "Key" => key = Some(get_text(el)),
+                "Value" => val = el.attributes.get("Ref"),
+                _ => panic!("Found el {} when parsing KV pair", el.name),
+            }
+        }
+    }
+
+    // blowing up if no key/value are found
+    (key.unwrap(), val.unwrap().to_owned())
+}
+
 fn get_kv_pair(e: &Element, inner_cipher: &mut dyn Cipher) -> (String, Value) {
     let mut key: Option<String> = None;
     let mut val: Option<Value> = None;
@@ -403,6 +447,10 @@ fn parse_entry(e: &Element, inner_cipher: &mut dyn Cipher) -> Entry {
                     entry.times = t;
                     entry.expires = e;
                     entry.usage_count = u;
+                }
+                "Binary" => {
+                    let (k, r) = get_entry_binary_ref(el);
+                    entry.binary_refs.insert(k, r.parse::<usize>().unwrap());
                 }
                 "String" => {
                     let (k, v) = get_kv_pair(el, inner_cipher);
@@ -506,17 +554,8 @@ fn parse_root(e: &Element, inner_cipher: &mut dyn Cipher) -> Group {
     root
 }
 pub(crate) fn parse_xml_block(xml: &[u8], inner_cipher: &mut dyn Cipher) -> Result<(Group, Meta)> {
-    let mut root_group: Group = Default::default();
-    let mut meta: Meta = Default::default();
     let root_el = Element::parse(xml).unwrap();
-    for node in &root_el.children {
-        if let XMLNode::Element(el) = node {
-            match el.name.as_str() {
-                "Root" => root_group = parse_root(el, inner_cipher),
-                "Meta" => meta = parse_meta(el),
-                _ => panic!("Found unknown element! {}", el.name),
-            }
-        }
-    }
+    let meta = parse_meta(root_el.get_child("Meta").unwrap());
+    let root_group = parse_root(root_el.get_child("Root").unwrap(), inner_cipher);
     Ok((root_group, meta))
 }

@@ -265,6 +265,7 @@ mod tests {
         let group = &recycle_group[0];
         if let NodeRef::Group(g) = group {
             assert_eq!(g.name, "Recycle Bin");
+            Ok(())
         } else {
             panic!("It should've matched a Group!");
         }
@@ -280,23 +281,68 @@ mod tests {
 
         let mut total_groups = 0;
         let mut total_entries = 0;
+        assert_eq!(db.meta.binaries.len(), 1);
+        assert_eq!(db.meta.binaries.get(0).unwrap().len(), 2097152);
         for node in &db.root {
             match node {
-                NodeRef::Group(g) => {
-                    println!("Saw group '{0}'", g.name);
+                NodeRef::Group(_) => {
                     total_groups += 1;
                 }
                 NodeRef::Entry(e) => {
-                    let title = e.get_title().unwrap();
-                    let user = e.get_username().unwrap();
-                    let pass = e.get_password().unwrap();
-                    println!("Entry '{0}': '{1}' : '{2}'", title, user, pass);
+                    assert_eq!(e.binary_refs.get("sample.png").unwrap().clone(), 0);
+                    assert_eq!(e.get_binary("sample.png", &db).unwrap().len(), 2097152);
                     total_entries += 1;
                 }
             }
         }
 
         assert_eq!(total_groups, 1);
+        assert_eq!(total_entries, 1);
+
+        println!("{:?}", db);
+
+        Ok(())
+    }
+
+    #[test]
+    fn open_kdbx4_with_larger_than_1mb_file_does_not_crash() -> Result<()> {
+        let path = Path::new("tests/resources/test_db_kdbx4_with_password_aes_largefile.kdbx");
+        let db = Database::open(&mut File::open(path)?, Some("demopass"), None)?;
+
+        assert_eq!(db.root.children.len(), 2);
+
+        let mut total_groups = 0;
+        let mut total_entries = 0;
+        match &db.inner_header {
+            InnerHeader::None => panic!("Got no inner header"),
+            InnerHeader::KDBX4(h) => {
+                assert_eq!(h.binaries.len(), 1);
+                assert_eq!(h.binaries.get(0).unwrap().content.len(), 2122340);
+            }
+        }
+        for node in &db.root {
+            match node {
+                NodeRef::Group(_) => {
+                    total_groups += 1;
+                }
+                NodeRef::Entry(e) => {
+                    assert_eq!(
+                        e.binary_refs
+                            .get("large-withfile.kdbx.zip")
+                            .unwrap()
+                            .clone(),
+                        0
+                    );
+                    assert_eq!(
+                        e.get_binary("large-withfile.kdbx.zip", &db).unwrap().len(),
+                        2122340
+                    );
+                    total_entries += 1;
+                }
+            }
+        }
+
+        assert_eq!(total_groups, 2);
         assert_eq!(total_entries, 1);
 
         println!("{:?}", db);

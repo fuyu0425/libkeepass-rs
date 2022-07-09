@@ -34,7 +34,7 @@ pub struct KDBX4Header {
 #[derive(Debug, PartialEq)]
 pub struct BinaryAttachment {
     flags: u8,
-    content: Vec<u8>,
+    pub content: Vec<u8>,
 }
 
 #[derive(Debug, FromPrimitive, ToPrimitive)]
@@ -82,7 +82,7 @@ impl From<&BinaryAttachment> for Vec<u8> {
 pub struct KDBX4InnerHeader {
     inner_random_stream: InnerCipherSuite,
     inner_random_stream_key: Vec<u8>,
-    binaries: Vec<BinaryAttachment>,
+    pub binaries: Vec<BinaryAttachment>,
     body_start: usize,
 }
 
