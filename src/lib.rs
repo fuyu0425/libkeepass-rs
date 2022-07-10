@@ -43,6 +43,7 @@ pub mod result;
 mod variant_dictionary;
 mod xml_parse;
 
+pub mod otp;
 pub mod parse;
 
 pub use self::db::*;
