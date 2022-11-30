@@ -12,7 +12,7 @@ use xml::writer::{EmitterConfig, EventWriter, Result as WResult, XmlEvent as WXm
 
 use std::io::Write;
 
-use super::db::{AutoType, AutoTypeAssociation, Database, Entry, Group, Meta, Node, Value};
+use super::db::{AutoType, AutoTypeAssociation, Database, Entry, Group, Icon, Meta, Node, Value};
 
 pub(crate) trait Serializable {
     fn serialize<W: Write>(
@@ -307,6 +307,7 @@ fn parse_meta(e: &Element) -> Meta {
                         }
                     }
                 }
+                "CustomIcons" => meta.custom_icons = get_icons(el),
                 _ => {
                     println!("Unhandled field {}", el.name);
                     meta.unhandled_fields.insert(el.name.clone(), get_text(el));
@@ -378,7 +379,8 @@ fn get_items(e: &Element) -> HashMap<String, String> {
                     match el.name.as_str() {
                         "Key" => k = Some(get_text(el)),
                         "Value" => v = Some(get_text(el)),
-                        _ => panic!("Found el {} when parsing KV pair", el.name),
+                        "LastModificationTime" => {}
+                        _ => panic!("Found el {} when parsing items KV pair", el.name),
                     }
                 }
             }
@@ -388,6 +390,32 @@ fn get_items(e: &Element) -> HashMap<String, String> {
     }
     ret
 }
+
+fn get_icons(e: &Element) -> HashMap<String, String> {
+    let mut ret = HashMap::new();
+
+    for node in &e.children {
+        // Item
+        if let XMLNode::Element(item_el) = node {
+            let mut k: Option<String> = None;
+            let mut v: Option<String> = None;
+            for node in &item_el.children {
+                if let XMLNode::Element(el) = node {
+                    match el.name.as_str() {
+                        "UUID" => k = Some(get_text(el)),
+                        "Data" => v = Some(get_text(el)),
+                        "LastModificationTime" => {}
+                        _ => panic!("Found el {} when parsing icons KV pair", el.name),
+                    }
+                }
+            }
+            // blowing up if no key/value are found
+            ret.insert(k.unwrap(), v.unwrap());
+        }
+    }
+    ret
+}
+
 fn get_entry_binary_ref(e: &Element) -> (String, String) {
     let mut key: Option<String> = None;
     let mut val: Option<&String> = None;
@@ -459,6 +487,13 @@ fn parse_entry(e: &Element, inner_cipher: &mut dyn Cipher) -> Entry {
                 "AutoType" => entry.autotype = parse_autotype(el),
                 "History" => entry.history = parse_history(el, inner_cipher),
                 "CustomData" => entry.custom_data = get_items(el),
+                "IconID" => {
+                    let icon_id = get_text(el).parse().unwrap_or(0);
+                    if icon_id > 0 {
+                        entry.icon = Icon::IconID(icon_id);
+                    }
+                }
+                "CustomIconUUID" => entry.icon = Icon::CustomIcon(get_text(el)),
                 _ => {
                     entry.unhandled_fields.insert(el.name.clone(), get_text(el));
                 }

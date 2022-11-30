@@ -194,7 +194,24 @@ pub struct Meta {
     pub binaries: Vec<Vec<u8>>,
     pub unhandled_fields: HashMap<String, String>,
     pub custom_data: HashMap<String, String>,
+    pub custom_icons: HashMap<String, String>,
     pub memory_protection: HashMap<String, String>,
+}
+#[derive(Debug, Eq, PartialEq)]
+pub enum Icon {
+    None,
+
+    /// The default included custom icons
+    IconID(u8),
+
+    /// Custom icon UUID, key in the Metadata.custom_icons
+    CustomIcon(String),
+}
+
+impl Default for Icon {
+    fn default() -> Self {
+        Icon::None
+    }
 }
 
 /// A database group with child groups and entries
@@ -222,6 +239,8 @@ pub struct Group {
     pub uuid: String,
 
     pub unhandled_fields: HashMap<String, String>,
+
+    pub icon: Icon,
 }
 
 impl Group {
@@ -392,6 +411,7 @@ pub struct Entry {
     pub unhandled_fields: HashMap<String, String>,
     pub custom_data: HashMap<String, String>,
     pub binary_refs: HashMap<String, usize>,
+    pub icon: Icon,
 }
 
 impl<'a> Entry {
