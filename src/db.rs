@@ -412,6 +412,7 @@ pub struct Entry {
     pub custom_data: HashMap<String, String>,
     pub binary_refs: HashMap<String, usize>,
     pub icon: Icon,
+    pub tags: Vec<String>,
 }
 
 impl<'a> Entry {

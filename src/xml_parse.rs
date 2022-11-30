@@ -494,6 +494,14 @@ fn parse_entry(e: &Element, inner_cipher: &mut dyn Cipher) -> Entry {
                     }
                 }
                 "CustomIconUUID" => entry.icon = Icon::CustomIcon(get_text(el)),
+                "Tags" => {
+                    let tag_string = get_text(el);
+                    if tag_string.len() > 0 {
+                        let tags: Vec<String> =
+                            tag_string.split(",").map(|x| x.to_string()).collect();
+                        entry.tags = tags;
+                    }
+                }
                 _ => {
                     entry.unhandled_fields.insert(el.name.clone(), get_text(el));
                 }
