@@ -309,7 +309,7 @@ fn parse_meta(e: &Element) -> Meta {
                 }
                 "CustomIcons" => meta.custom_icons = get_icons(el),
                 _ => {
-                    println!("Unhandled field {}", el.name);
+                    eprintln!("Unhandled field {}", el.name);
                     meta.unhandled_fields.insert(el.name.clone(), get_text(el));
                 }
             }
@@ -590,7 +590,8 @@ fn parse_root(e: &Element, inner_cipher: &mut dyn Cipher) -> Group {
         if let XMLNode::Element(el) = node {
             match el.name.as_str() {
                 "Group" => root = parse_group(el, inner_cipher),
-                _ => println!("<root> Found unknown element! {}", el.name),
+                "DeletedObject" => {}
+                _ => eprintln!("<root> Found unknown element! {}", el.name),
             }
         }
     }
