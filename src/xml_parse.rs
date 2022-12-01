@@ -4,6 +4,7 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use flate2::read::GzDecoder;
 use std::collections::HashMap;
 use std::io::Read;
+use tracing::warn;
 use xmltree::{Element, XMLNode};
 
 use secstr::SecStr;
@@ -309,7 +310,7 @@ fn parse_meta(e: &Element) -> Meta {
                 }
                 "CustomIcons" => meta.custom_icons = get_icons(el),
                 _ => {
-                    eprintln!("Unhandled field {}", el.name);
+                    warn!("Unhandled field {}", el.name);
                     meta.unhandled_fields.insert(el.name.clone(), get_text(el));
                 }
             }
@@ -591,7 +592,7 @@ fn parse_root(e: &Element, inner_cipher: &mut dyn Cipher) -> Group {
             match el.name.as_str() {
                 "Group" => root = parse_group(el, inner_cipher),
                 "DeletedObject" => {}
-                _ => eprintln!("<root> Found unknown element! {}", el.name),
+                _ => warn!("<root> Found unknown element! {}", el.name),
             }
         }
     }
