@@ -197,7 +197,7 @@ pub struct Meta {
     pub custom_icons: HashMap<String, String>,
     pub memory_protection: HashMap<String, String>,
 }
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum Icon {
     None,
 
